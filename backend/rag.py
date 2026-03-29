@@ -46,7 +46,7 @@ INSTRUCTIONS:
 1. Always prioritize the 'RELEVANT CONTEXT FROM NOTES' over the conversation history to answer the question.
 2. Be concise, well-structured, and clear. Use bullet points when helpful.
 3. Do not just blindly repeat raw chunks of context—synthesize a fluid answer.
-4. If the provided context does not contain the answer, politely respond "I don't know" or state that the notes don't have that information. Do NOT hallucinate.
+4. If the provided context does not explicitly contain the answer, your ONLY response must be exactly "I couldn't find relevant notes for this question." Do NOT hallucinate or guess.
 
 QUESTION: {question}
 
@@ -94,10 +94,17 @@ class RAGPipeline:
                 "model": self.ollama.model,
             }
 
-        # Step 1: Embed the question locally
-        q_embedding = self.embeddings.encode_single(question)
+        # Step 1: Enhance search query conditionally for short follow-ups
+        search_query = question
+        if len(question.split()) < 4 and chat_history:
+            last_user_msg = next((msg.get("content", "") for msg in reversed(chat_history) if msg.get("role") == "user"), None)
+            if last_user_msg:
+                search_query = f"{last_user_msg} {question}"
 
-        # Step 2: Retrieve top-k relevant chunks from ChromaDB
+        # Step 2: Embed the search query locally
+        q_embedding = self.embeddings.encode_single(search_query)
+
+        # Step 3: Retrieve top-k relevant chunks from ChromaDB
         effective_k = min(top_k, total)
         results = self.collection.query(
             query_embeddings=[q_embedding],
@@ -147,9 +154,14 @@ class RAGPipeline:
             result = await self.ollama.generate(prompt)
 
             if result["success"] and result["text"]:
+                answer_text = result["text"].strip()
+                ollama_sources = sources
+                if answer_text == "I couldn't find relevant notes for this question.":
+                    ollama_sources = []
+                
                 return {
-                    "answer": result["text"],
-                    "sources": sources,
+                    "answer": answer_text,
+                    "sources": ollama_sources,
                     "ollama_available": True,
                     "ollama_error": None,
                     "mode": "ollama",
@@ -163,9 +175,14 @@ class RAGPipeline:
 
         # Step 5: Fallback to extractive answer
         answer = extractive_fallback(question, final_contexts)
+        
+        fallback_sources = sources
+        if answer.strip() == "I couldn't find relevant notes for this question.":
+            fallback_sources = []
+            
         return {
             "answer": answer,
-            "sources": sources,
+            "sources": fallback_sources,
             "ollama_available": False,
             "ollama_error": ollama_error,
             "mode": "extractive",

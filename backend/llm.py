@@ -152,14 +152,14 @@ def extractive_fallback(question: str, contexts: List[str]) -> str:
     Works fully offline — no LLM needed.
     """
     if not contexts:
-        return "No relevant notes found for your question."
+        return "I couldn't find relevant notes for this question."
 
     all_text = " ".join(contexts)
     sentences = re.split(r'(?<=[.!?])\s+', all_text)
     sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
 
     if not sentences:
-        return "Found matching notes but could not extract a clear answer.\n\n" + "\n".join(contexts[:3])
+        return "I couldn't find relevant notes for this question."
 
     # Score by keyword overlap
     q_words = set(question.lower().split())
@@ -172,7 +172,7 @@ def extractive_fallback(question: str, contexts: List[str]) -> str:
     scored.sort(key=lambda x: -x[0])
     top_sentences = [s for score, s in scored[:5] if score > 0]
     if not top_sentences:
-        top_sentences = sentences[:3]
+        return "I couldn't find relevant notes for this question."
 
     answer = "Based on your notes:\n\n" + " ".join(top_sentences)
     answer += "\n\n[Extractive mode — Ollama offline. Install Ollama for AI-generated answers.]"
