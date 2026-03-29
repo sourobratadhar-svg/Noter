@@ -102,7 +102,10 @@ export default function ChatScreen() {
           </View>
         )}
         {item.role === 'assistant' && item.ollama_available === false && item.mode === 'extractive' && (
-          <Text style={styles.fallbackNotice}>// EXTRACTIVE MODE — OLLAMA OFFLINE</Text>
+          <View>
+            <Text style={styles.fallbackNotice}>// EXTRACTIVE MODE — OLLAMA OFFLINE</Text>
+            {item.ollama_error && <Text style={styles.errorText}>ERROR: {item.ollama_error}</Text>}
+          </View>
         )}
         {item.role === 'assistant' && item.ollama_available === true && item.mode === 'ollama' && (
           <Text style={styles.ollamaNotice}>// OLLAMA [{item.model}]</Text>

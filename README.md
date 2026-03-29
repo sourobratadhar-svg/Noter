@@ -124,18 +124,24 @@ npx expo start
 
 ### Ollama Setup (Optional)
 
-Ollama enables AI-generated answers instead of extractive fallback.
+Ollama enables AI-generated generative RAG answers instead of the offline extractive fallback.
 
 ```bash
-# Install Ollama
+# Install Ollama (macOS/Linux)
 curl -fsSL https://ollama.ai/install.sh | sh
 
-# Pull a model
-ollama pull mistral
+# Start the Ollama server (required if not running in the background)
+ollama serve
 
-# Ollama runs automatically on localhost:11434
-# The app auto-detects it
+# Pull the default inference model
+ollama pull mistral
 ```
+
+### Example Queries
+Try inserting notes, then ask questions like:
+- "Can you summarize my notes about deep learning?"
+- "What are the main points discussed regarding database architecture?"
+- "List all mentioned action items from yesterday's meeting."
 
 ---
 
@@ -196,7 +202,11 @@ EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 ```
 noter/
 ├── backend/
-│   ├── server.py          # FastAPI app with all modules
+│   ├── server.py          # FastAPI app routing
+│   ├── llm.py             # Ollama local inference & error handling
+│   ├── rag.py             # Generative RAG retrieval pipeline
+│   ├── embeddings.py      # Local vector generation
+│   ├── chunking.py        # Semantic document splitting
 │   ├── .env               # Backend configuration
 │   ├── requirements.txt   # Python dependencies
 │   └── chroma_data/       # Persistent vector storage
