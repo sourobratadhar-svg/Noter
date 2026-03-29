@@ -26,6 +26,9 @@ type Message = {
   text: string;
   sources?: Source[];
   ollama_available?: boolean;
+  ollama_error?: string;
+  mode?: string;
+  model?: string;
 };
 
 export default function ChatScreen() {
@@ -58,13 +61,16 @@ export default function ChatScreen() {
         text: data.answer || 'No response.',
         sources: data.sources || [],
         ollama_available: data.ollama_available,
+        ollama_error: data.ollama_error,
+        mode: data.mode,
+        model: data.model,
       };
       setMessages(prev => [...prev, aiMsg]);
     } catch (err) {
       const errMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        text: 'Error connecting to backend. Check system status.',
+        text: 'Cannot reach backend server.\n\nTroubleshooting:\n1. Is the backend running? (python server.py)\n2. Are phone and laptop on the same WiFi?\n3. Check the SYS tab for connection details.',
       };
       setMessages(prev => [...prev, errMsg]);
     } finally {
@@ -95,8 +101,11 @@ export default function ChatScreen() {
             {item.sources.map((s, i) => renderSource(s, i))}
           </View>
         )}
-        {item.role === 'assistant' && item.ollama_available === false && (
+        {item.role === 'assistant' && item.ollama_available === false && item.mode === 'extractive' && (
           <Text style={styles.fallbackNotice}>// EXTRACTIVE MODE — OLLAMA OFFLINE</Text>
+        )}
+        {item.role === 'assistant' && item.ollama_available === true && item.mode === 'ollama' && (
+          <Text style={styles.ollamaNotice}>// OLLAMA [{item.model}]</Text>
         )}
       </View>
     );
@@ -225,6 +234,10 @@ const styles = StyleSheet.create({
   },
   fallbackNotice: {
     fontFamily: 'Courier', fontSize: 10, color: '#FF2A00',
+    marginTop: 8, letterSpacing: 1,
+  },
+  ollamaNotice: {
+    fontFamily: 'Courier', fontSize: 10, color: '#00D154',
     marginTop: 8, letterSpacing: 1,
   },
   emptyContainer: { alignItems: 'center', paddingHorizontal: 32 },

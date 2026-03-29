@@ -1,74 +1,40 @@
-# Privacy-First RAG Notes App - PRD
+# Privacy-First RAG Notes App — PRD
 
 ## Overview
-A fully local, privacy-first Retrieval-Augmented Generation (RAG) application that indexes and retrieves information from personal notes. All data processing happens on-device with no external API calls.
+Mobile-first, fully local RAG application. Mobile app = interface, local backend = intelligence. All user data stays private.
 
 ## Architecture
-- **Frontend**: React Native (Expo) with Swiss brutalist design
-- **Backend**: Python FastAPI
-- **Vector Database**: ChromaDB (persistent local storage)
-- **Embeddings**: sentence-transformers (all-MiniLM-L6-v2, 384 dimensions)
-- **LLM**: Ollama (local, with extractive fallback when unavailable)
-- **Metadata Store**: MongoDB
-- **Graph Viz**: d3-force (via WebView)
+```
+Mobile (Expo) ←→ FastAPI Backend ←→ {ChromaDB, MongoDB, Ollama}
+              (same WiFi network)        (all on laptop)
+```
 
-## Features
+## Backend Modules
+- **`llm.py`** — OllamaClient class: health checks, model listing, generation, model switching
+- **`embeddings.py`** — EmbeddingEngine: sentence-transformers local encoding
+- **`chunking.py`** — Semantic text splitting (paragraph → sentence → hard split)
+- **`rag.py`** — RAGPipeline: embed → retrieve → prompt → generate (with extractive fallback)
+- **`server.py`** — FastAPI routes, MongoDB, ChromaDB, graph computation
 
-### 1. Notes Ingestion
-- Paste text directly into the app
-- Upload .txt/.md files from device storage
-- Automatic chunking into semantically meaningful segments (300-500 tokens)
-- Local embedding generation using sentence-transformers
+## API Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/health` | Detailed health (backend, ChromaDB, Ollama + models) |
+| `GET` | `/api/stats` | Collection statistics |
+| `GET` | `/api/ollama/status` | Detailed Ollama diagnostics + troubleshooting |
+| `POST` | `/api/ollama/model` | Switch active Ollama model at runtime |
+| `POST` | `/api/ingest` | Ingest text note |
+| `POST` | `/api/ingest-file` | Ingest .txt/.md file |
+| `POST` | `/api/ask` | RAG query (answer + sources + mode + model) |
+| `GET` | `/api/notes?page=1&limit=20` | Paginated notes list |
+| `DELETE` | `/api/notes/{id}` | Delete note + vectors |
+| `GET` | `/api/graph?threshold=0.65` | Knowledge graph |
 
-### 2. Vector Indexing
-- ChromaDB persistent collection with cosine similarity
-- Embeddings generated locally (no network calls)
-- Mapping maintained between chunks and original notes
-
-### 3. RAG Query
-- Semantic search via top-k chunk retrieval
-- Grounded prompt construction (answers only from context)
-- Ollama LLM integration for generated answers
-- Extractive fallback when Ollama is unavailable
-
-### 4. Knowledge Graph Visualization
-- Force-directed graph using d3-force in WebView
-- Nodes = note chunks, Edges = cosine similarity above configurable threshold
-- Zoom, pan, drag, and node highlighting
-- Cached computation for fast rendering
-- Graph cache invalidated on ingest/delete
-
-### 5. API Layer (Paginated)
-- `POST /api/ingest` - Ingest text notes
-- `POST /api/ingest-file` - Ingest .txt/.md files
-- `POST /api/ask` - RAG query with answer + sources
-- `GET /api/notes?page=1&limit=20` - Paginated notes list
-- `DELETE /api/notes/{id}` - Delete note and vectors
-- `GET /api/health` - System health check
-- `GET /api/stats` - Collection statistics
-- `GET /api/graph?threshold=0.65` - Knowledge graph (nodes + edges)
-
-### 6. Frontend (4 Tabs)
-- **CHAT**: Ask questions, see RAG answers with source snippets
-- **NOTES**: Add/view/delete notes with infinite scroll pagination
-- **GRAPH**: Interactive knowledge graph with threshold controls
-- **SYS**: Health status, stats, configuration, Ollama setup guide
-
-## Privacy & Security
-- All data stored locally
-- No external API calls
-- No telemetry or tracking
-- No user content logging
-
-## Performance
-- Graph edges cached in MongoDB
-- Paginated note queries (skip/limit)
-- Batch embedding generation
-- Fast retrieval (<1s target)
+## Frontend (4 Tabs)
+- **CHAT**: RAG query with mode indicator (ollama/extractive), source snippets
+- **NOTES**: Add/view/delete notes, infinite scroll pagination
+- **GRAPH**: Interactive d3-force knowledge graph
+- **SYS**: Health dashboard, Ollama diagnostics, model switcher, network setup guide
 
 ## Tech Stack
-- Expo SDK 54, React Native 0.81
-- FastAPI, ChromaDB, sentence-transformers, numpy
-- MongoDB for metadata + graph cache
-- Ollama for local LLM (optional)
-- d3-force for graph visualization
+- Expo SDK 54, FastAPI, ChromaDB, sentence-transformers, Ollama, MongoDB, d3-force, numpy
