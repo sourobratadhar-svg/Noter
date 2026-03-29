@@ -15,7 +15,7 @@ const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 type Source = {
   chunk_index: number;
-  text: string;
+  preview: string;
   note_title: string;
   relevance: number;
 };
@@ -42,6 +42,14 @@ export default function ChatScreen() {
     if (!q || loading) return;
     Keyboard.dismiss();
 
+    // Map history (rolling window of 3 interactions)
+    const history = messages.slice(-3)
+      .filter(m => !m.text.includes('Cannot reach backend'))
+      .map(m => ({
+        role: m.role,
+        content: m.text
+      }));
+
     const userMsg: Message = { id: Date.now().toString(), role: 'user', text: q };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
@@ -51,7 +59,7 @@ export default function ChatScreen() {
       const resp = await fetch(`${API_URL}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q, top_k: 5 }),
+        body: JSON.stringify({ question: q, top_k: 3, chat_history: history }),
       });
       const data = await resp.json();
 
@@ -81,8 +89,7 @@ export default function ChatScreen() {
   const renderSource = (source: Source, index: number) => (
     <View key={index} style={styles.sourceBlock} testID={`source-snippet-${index}`}>
       <Text style={styles.sourceLabel}>SRC // {source.note_title}</Text>
-      <Text style={styles.sourceText}>{source.text}</Text>
-      <Text style={styles.sourceRelevance}>RELEVANCE: {(source.relevance * 100).toFixed(1)}%</Text>
+      <Text style={styles.sourceText}>"{source.preview}"</Text>
     </View>
   );
 
@@ -149,7 +156,8 @@ export default function ChatScreen() {
 
         {loading && (
           <View style={styles.loadingBar} testID="chat-loading">
-            <Text style={styles.loadingText}>[ PROCESSING... ]</Text>
+            <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 10 }} />
+            <Text style={styles.loadingText}>[ THINKING... ]</Text>
           </View>
         )}
 
@@ -210,7 +218,7 @@ const styles = StyleSheet.create({
   },
   messageText: {
     fontFamily: 'Courier', fontSize: 14, color: '#0A0A0A',
-    lineHeight: 22,
+    lineHeight: 24, paddingVertical: 4,
   },
   sourcesContainer: {
     marginTop: 12, borderTopWidth: 1, borderTopColor: '#CCCCCC',
@@ -260,7 +268,8 @@ const styles = StyleSheet.create({
     textAlign: 'center', lineHeight: 20, marginBottom: 4,
   },
   loadingBar: {
-    backgroundColor: '#0A0A0A', paddingVertical: 8, alignItems: 'center',
+    backgroundColor: '#0A0A0A', paddingVertical: 10,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
   },
   loadingText: {
     fontFamily: 'Courier', fontWeight: '600', fontSize: 12,

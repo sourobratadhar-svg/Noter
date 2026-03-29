@@ -20,23 +20,37 @@ from llm import OllamaClient, extractive_fallback
 from embeddings import EmbeddingEngine
 
 
-def build_rag_prompt(question: str, contexts: List[str]) -> str:
+def build_rag_prompt(question: str, contexts: List[str], chat_history: List[dict] = None) -> str:
     """
     Construct a grounded prompt for the LLM.
     The prompt instructs the model to answer ONLY from provided context,
     preventing hallucination and ensuring all answers trace to user notes.
     """
     context_block = "\n\n---\n\n".join(contexts)
-    return f"""You are a helpful assistant that answers questions based ONLY on the provided context from the user's personal notes. Do not use any external knowledge. If the answer cannot be found in the context, say "I couldn't find relevant information in your notes."
+    
+    history_block = ""
+    if chat_history:
+        history_lines = []
+        for msg in chat_history:
+            role = "USER" if msg.get("role") == "user" else "ASSISTANT"
+            history_lines.append(f"{role}: {msg.get('content', '')}")
+        if history_lines:
+            history_block = "CONVERSATION HISTORY:\n" + "\n".join(history_lines) + "\n\n"
 
-Be concise and direct. Quote relevant parts of the notes when helpful.
+    return f"""You are a highly capable personal knowledge assistant. Your core directive is to answer the user's question based strictly on the provided context retrieved from their notes.
 
-CONTEXT FROM NOTES:
+{history_block}RELEVANT CONTEXT FROM NOTES:
 {context_block}
+
+INSTRUCTIONS:
+1. Always prioritize the 'RELEVANT CONTEXT FROM NOTES' over the conversation history to answer the question.
+2. Be concise, well-structured, and clear. Use bullet points when helpful.
+3. Do not just blindly repeat raw chunks of context—synthesize a fluid answer.
+4. If the provided context does not contain the answer, politely respond "I don't know" or state that the notes don't have that information. Do NOT hallucinate.
 
 QUESTION: {question}
 
-ANSWER (based strictly on the above context):"""
+ANSWER:"""
 
 
 class RAGPipeline:
@@ -50,18 +64,19 @@ class RAGPipeline:
         self.collection = collection
         self.ollama = ollama_client
 
-    async def query(self, question: str, top_k: int = 5) -> dict:
+    async def query(self, question: str, top_k: int = 3, chat_history: List[dict] = None) -> dict:
         """
         Full RAG query pipeline.
 
         Args:
             question: User's natural language question
-            top_k: Number of chunks to retrieve (default 5, capped to collection size)
+            top_k: Number of chunks to retrieve
+            chat_history: Optional history of user/assistant interactions
 
         Returns:
             {
                 "answer": str,
-                "sources": [{chunk_index, text, note_title, note_id, relevance}],
+                "sources": [{chunk_index, preview, note_title, note_id, relevance}],
                 "ollama_available": bool,
                 "ollama_error": str|None,
                 "mode": "ollama" | "extractive",
@@ -94,12 +109,29 @@ class RAGPipeline:
         metadatas = results["metadatas"][0] if results["metadatas"] else []
         distances = results["distances"][0] if results["distances"] else []
 
+        # Accumulate chunks until a limit of ~4000 characters is reached
+        char_limit = 4000
+        current_chars = 0
+        final_contexts = []
+        final_metadatas = []
+        final_distances = []
+        
+        for doc, meta, dist in zip(contexts, metadatas, distances):
+            doc_len = len(doc)
+            if final_contexts and current_chars + doc_len > char_limit:
+                break
+            final_contexts.append(doc)
+            final_metadatas.append(meta)
+            final_distances.append(dist)
+            current_chars += doc_len
+
         # Build source references for frontend
         sources = []
-        for i, (doc, meta, dist) in enumerate(zip(contexts, metadatas, distances)):
+        for i, (doc, meta, dist) in enumerate(zip(final_contexts, final_metadatas, final_distances)):
+            preview = doc[:150].replace('\n', ' ').strip() + ("..." if len(doc) > 150 else "")
             sources.append({
                 "chunk_index": i,
-                "text": doc[:300],
+                "preview": preview,
                 "note_title": meta.get("title", "Unknown"),
                 "note_id": meta.get("note_id", ""),
                 "relevance": round(1 - dist, 3)
@@ -111,7 +143,7 @@ class RAGPipeline:
 
         if ollama_status["available"]:
             # Step 4: Build grounded prompt and generate
-            prompt = build_rag_prompt(question, contexts)
+            prompt = build_rag_prompt(question, final_contexts, chat_history)
             result = await self.ollama.generate(prompt)
 
             if result["success"] and result["text"]:
@@ -130,7 +162,7 @@ class RAGPipeline:
             ollama_error = ollama_status.get("error", "Ollama not available")
 
         # Step 5: Fallback to extractive answer
-        answer = extractive_fallback(question, contexts)
+        answer = extractive_fallback(question, final_contexts)
         return {
             "answer": answer,
             "sources": sources,

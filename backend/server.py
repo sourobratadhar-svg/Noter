@@ -81,7 +81,8 @@ class NoteIngestRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
-    top_k: int = 5
+    top_k: int = 3
+    chat_history: List[dict] = []
 
 class NoteResponse(BaseModel):
     id: str
@@ -384,7 +385,7 @@ async def ask_question(request: AskRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
     # Delegate to RAG pipeline module
-    result = await rag_pipeline.query(question, top_k=request.top_k)
+    result = await rag_pipeline.query(question, top_k=request.top_k, chat_history=request.chat_history)
 
     return AskResponse(
         answer=result["answer"],
