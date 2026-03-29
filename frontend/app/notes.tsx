@@ -6,8 +6,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, SafeAreaView, Alert, ScrollView, Platform,
+  StyleSheet, Alert, ScrollView, Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
