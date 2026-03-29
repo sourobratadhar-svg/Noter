@@ -1,17 +1,20 @@
 /**
- * NOTES Screen - Ingest & Manage Notes
- * Paste text or upload .txt/.md files. View and delete ingested notes.
+ * NOTES Screen - Ingest & Manage Notes with Pagination
+ * ====================================================
+ * Paste text or upload .txt/.md files. View/delete ingested notes.
+ * Supports infinite scroll pagination for large note collections.
  * Terminal-style input area, flat card list.
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, Alert, ScrollView, Platform,
+  StyleSheet, Alert, ScrollView, Platform, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const PAGE_LIMIT = 20;
 
 type Note = {
   id: string;
@@ -30,20 +33,45 @@ export default function NotesScreen() {
   const [ingesting, setIngesting] = useState(false);
   const [mode, setMode] = useState<'list' | 'add'>('list');
 
-  const fetchNotes = useCallback(async () => {
-    setLoading(true);
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalNotes, setTotalNotes] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  /** Fetch notes with pagination — page 1 replaces, page N appends */
+  const fetchNotes = useCallback(async (pageNum: number = 1, append: boolean = false) => {
+    if (pageNum === 1) setLoading(true);
+    else setLoadingMore(true);
+
     try {
-      const resp = await fetch(`${API_URL}/api/notes`);
+      const resp = await fetch(`${API_URL}/api/notes?page=${pageNum}&limit=${PAGE_LIMIT}`);
       const data = await resp.json();
-      setNotes(data);
+
+      if (append) {
+        setNotes(prev => [...prev, ...data.notes]);
+      } else {
+        setNotes(data.notes);
+      }
+      setPage(data.page);
+      setTotalPages(data.total_pages);
+      setTotalNotes(data.total);
     } catch {
       // silently fail
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
-  useEffect(() => { fetchNotes(); }, []);
+  useEffect(() => { fetchNotes(1); }, []);
+
+  /** Load next page when reaching end of list */
+  const loadMore = useCallback(() => {
+    if (!loadingMore && page < totalPages) {
+      fetchNotes(page + 1, true);
+    }
+  }, [loadingMore, page, totalPages, fetchNotes]);
 
   const ingestText = async () => {
     if (!content.trim()) return;
@@ -60,7 +88,7 @@ export default function NotesScreen() {
         setTitle('');
         setContent('');
         setMode('list');
-        fetchNotes();
+        fetchNotes(1);  // Refresh from page 1
       } else {
         Alert.alert('ERROR', data.detail || 'Ingestion failed');
       }
@@ -89,7 +117,6 @@ export default function NotesScreen() {
 
       setIngesting(true);
 
-      // Read file content and send as text
       const response = await fetch(file.uri);
       const text = await response.text();
 
@@ -105,7 +132,7 @@ export default function NotesScreen() {
       const data = await resp.json();
       if (resp.ok) {
         Alert.alert('INGESTED', `${data.chunk_count} chunks indexed from "${data.title}"`);
-        fetchNotes();
+        fetchNotes(1);
       } else {
         Alert.alert('ERROR', data.detail || 'File ingestion failed');
       }
@@ -124,7 +151,7 @@ export default function NotesScreen() {
         onPress: async () => {
           try {
             await fetch(`${API_URL}/api/notes/${noteId}`, { method: 'DELETE' });
-            fetchNotes();
+            fetchNotes(1);
           } catch {
             Alert.alert('ERROR', 'Could not delete note');
           }
@@ -157,6 +184,28 @@ export default function NotesScreen() {
     </View>
   );
 
+  /** Footer: shows loading indicator or pagination info */
+  const renderFooter = () => {
+    if (loadingMore) {
+      return (
+        <View style={styles.footerLoading} testID="notes-loading-more">
+          <Text style={styles.footerText}>[ LOADING MORE... ]</Text>
+        </View>
+      );
+    }
+    if (notes.length > 0 && page >= totalPages) {
+      return (
+        <View style={styles.footerInfo} testID="notes-end-marker">
+          <Text style={styles.footerText}>
+            {totalNotes} NOTES // PAGE {page}/{totalPages}
+          </Text>
+        </View>
+      );
+    }
+    return null;
+  };
+
+  // ─── ADD NOTE MODE ───
   if (mode === 'add') {
     return (
       <SafeAreaView style={styles.container}>
@@ -221,12 +270,13 @@ export default function NotesScreen() {
     );
   }
 
+  // ─── NOTE LIST MODE ───
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>NOTES</Text>
-          <Text style={styles.headerSub}>{notes.length} INDEXED</Text>
+          <Text style={styles.headerSub}>{totalNotes} INDEXED</Text>
         </View>
         <TouchableOpacity
           testID="add-note-btn"
@@ -246,12 +296,17 @@ export default function NotesScreen() {
         style={styles.notesList}
         contentContainerStyle={notes.length === 0 ? styles.emptyList : undefined}
         refreshing={loading}
-        onRefresh={fetchNotes}
+        onRefresh={() => fetchNotes(1)}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.3}
+        ListFooterComponent={renderFooter}
         ListEmptyComponent={
-          <View style={styles.emptyContainer} testID="notes-empty-state">
-            <Text style={styles.emptyTitle}>NO NOTES</Text>
-            <Text style={styles.emptyHint}>Tap [+ ADD] to ingest your first note.</Text>
-          </View>
+          !loading ? (
+            <View style={styles.emptyContainer} testID="notes-empty-state">
+              <Text style={styles.emptyTitle}>NO NOTES</Text>
+              <Text style={styles.emptyHint}>Tap [+ ADD] to ingest your first note.</Text>
+            </View>
+          ) : null
         }
       />
     </SafeAreaView>
@@ -365,5 +420,17 @@ const styles = StyleSheet.create({
   dividerText: {
     fontFamily: 'Courier', fontSize: 12, color: '#555555',
     marginHorizontal: 12, letterSpacing: 2,
+  },
+  footerLoading: {
+    paddingVertical: 16, alignItems: 'center',
+    borderTopWidth: 1, borderTopColor: '#E0E0E0',
+  },
+  footerInfo: {
+    paddingVertical: 12, alignItems: 'center',
+    borderTopWidth: 1, borderTopColor: '#E0E0E0',
+  },
+  footerText: {
+    fontFamily: 'Courier', fontSize: 10, color: '#555555',
+    letterSpacing: 2,
   },
 });

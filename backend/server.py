@@ -2,14 +2,22 @@
 Privacy-First RAG Notes Server
 ===============================
 All processing happens locally. No external API calls.
+
 Architecture:
   - ChromaDB for persistent vector storage
-  - sentence-transformers for local embeddings
+  - sentence-transformers for local embeddings (all-MiniLM-L6-v2)
   - Ollama for local LLM inference (with extractive fallback)
-  - MongoDB for note metadata
+  - MongoDB for note metadata + graph cache
+
+Modules:
+  - Ingestion: chunk_text() — semantic paragraph/sentence splitting
+  - Embeddings: generate_embeddings() — batched local encoding
+  - Retrieval: RAG pipeline with top-k cosine search
+  - Graph: compute_knowledge_graph() — pairwise similarity edges
+  - LLM: Ollama wrapper with extractive fallback
 """
 
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -24,16 +32,19 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 import httpx
 import re
+import numpy as np
+import hashlib
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+# ─── Database Connections ───
+
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'rag_notes')]
 
-# ChromaDB persistent storage
+# ChromaDB persistent storage (local vector database)
 CHROMA_PATH = str(ROOT_DIR / "chroma_data")
 chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
 collection = chroma_client.get_or_create_collection(
@@ -41,12 +52,15 @@ collection = chroma_client.get_or_create_collection(
     metadata={"hnsw:space": "cosine"}
 )
 
-# Local embedding model (all-MiniLM-L6-v2, 384 dimensions)
+# Local embedding model — runs entirely on-device, 384-dim vectors
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Ollama config
+# Ollama config (local LLM — no network calls)
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'mistral')
+
+# Graph similarity threshold — edges created for chunk pairs above this
+GRAPH_SIMILARITY_THRESHOLD = float(os.environ.get('GRAPH_SIMILARITY_THRESHOLD', '0.65'))
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -70,6 +84,13 @@ class NoteResponse(BaseModel):
     char_count: int
     created_at: str
 
+class PaginatedNotesResponse(BaseModel):
+    notes: List[NoteResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
 class AskResponse(BaseModel):
     answer: str
     sources: List[dict]
@@ -89,20 +110,38 @@ class StatsResponse(BaseModel):
     embedding_dim: int
     ollama_model: str
 
-# ─── Chunking Module ───
+class GraphNode(BaseModel):
+    id: str
+    label: str
+    note_title: str
+    note_id: str
+    chunk_index: int
+    text_preview: str
+
+class GraphEdge(BaseModel):
+    source: str
+    target: str
+    weight: float
+
+class GraphResponse(BaseModel):
+    nodes: List[GraphNode]
+    edges: List[GraphEdge]
+    threshold: float
+    cached: bool
+
+# ─── Ingestion Module: Chunking ───
 
 def chunk_text(text: str, max_tokens: int = 400, overlap: int = 50) -> List[str]:
     """
-    Split text into semantically meaningful chunks.
-    Uses paragraph boundaries first, then sentence boundaries,
-    then falls back to token-level splitting.
+    Split text into semantically meaningful chunks (300-500 token range).
+    Strategy: paragraph boundaries → sentence boundaries → hard split.
+    Tokens estimated at ~4 chars each.
     """
-    # Clean the text
     text = text.strip()
     if not text:
         return []
 
-    # Split by paragraphs first
+    # Split by double-newlines (paragraph boundaries)
     paragraphs = re.split(r'\n\s*\n', text)
     paragraphs = [p.strip() for p in paragraphs if p.strip()]
 
@@ -110,7 +149,6 @@ def chunk_text(text: str, max_tokens: int = 400, overlap: int = 50) -> List[str]
     current_chunk = ""
 
     for para in paragraphs:
-        # Estimate tokens (~4 chars per token)
         combined = (current_chunk + "\n\n" + para).strip() if current_chunk else para
         estimated_tokens = len(combined) // 4
 
@@ -119,7 +157,7 @@ def chunk_text(text: str, max_tokens: int = 400, overlap: int = 50) -> List[str]
         else:
             if current_chunk:
                 chunks.append(current_chunk)
-            # If single paragraph is too long, split by sentences
+            # Long paragraph: split by sentences
             if len(para) // 4 > max_tokens:
                 sentences = re.split(r'(?<=[.!?])\s+', para)
                 sub_chunk = ""
@@ -141,20 +179,23 @@ def chunk_text(text: str, max_tokens: int = 400, overlap: int = 50) -> List[str]
     if current_chunk:
         chunks.append(current_chunk)
 
-    # Ensure minimum chunk quality
+    # Filter out tiny fragments that lack semantic value
     return [c for c in chunks if len(c) > 20]
 
-# ─── Embedding Module ───
+# ─── Embeddings Module ───
 
 def generate_embeddings(texts: List[str]) -> List[List[float]]:
-    """Generate embeddings locally using sentence-transformers."""
+    """
+    Generate embeddings locally using sentence-transformers.
+    Batched for efficiency — no network calls made.
+    """
     embeddings = embedding_model.encode(texts, batch_size=32, show_progress_bar=False)
     return embeddings.tolist()
 
-# ─── Ollama LLM Module ───
+# ─── LLM Module: Ollama ───
 
 async def check_ollama() -> bool:
-    """Check if Ollama is running and accessible."""
+    """Check if Ollama is running locally."""
     try:
         async with httpx.AsyncClient(timeout=3.0) as client_http:
             resp = await client_http.get(f"{OLLAMA_BASE_URL}/api/tags")
@@ -163,7 +204,7 @@ async def check_ollama() -> bool:
         return False
 
 async def call_ollama(prompt: str) -> Optional[str]:
-    """Call Ollama for LLM generation. Returns None if unavailable."""
+    """Call local Ollama for LLM generation. Returns None if unavailable."""
     try:
         async with httpx.AsyncClient(timeout=60.0) as client_http:
             resp = await client_http.post(
@@ -184,12 +225,12 @@ async def call_ollama(prompt: str) -> Optional[str]:
 def extractive_fallback(question: str, contexts: List[str]) -> str:
     """
     Fallback answer generation when Ollama is unavailable.
-    Extracts and ranks relevant sentences from context.
+    Ranks sentences by keyword overlap with the question,
+    returning the most relevant excerpts from context.
     """
     if not contexts:
         return "No relevant notes found for your question."
 
-    # Combine all contexts
     all_text = " ".join(contexts)
     sentences = re.split(r'(?<=[.!?])\s+', all_text)
     sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
@@ -197,7 +238,7 @@ def extractive_fallback(question: str, contexts: List[str]) -> str:
     if not sentences:
         return "Found matching notes but could not extract a clear answer. Here are the relevant passages:\n\n" + "\n".join(contexts[:3])
 
-    # Score sentences by keyword overlap with question
+    # Score by keyword overlap (simple but effective for extractive)
     q_words = set(question.lower().split())
     scored = []
     for sent in sentences:
@@ -206,9 +247,7 @@ def extractive_fallback(question: str, contexts: List[str]) -> str:
         scored.append((overlap, sent))
 
     scored.sort(key=lambda x: -x[0])
-
-    # Take top relevant sentences
-    top_sentences = [s for _, s in scored[:5] if _ > 0]
+    top_sentences = [s for score, s in scored[:5] if score > 0]
 
     if not top_sentences:
         top_sentences = sentences[:3]
@@ -217,10 +256,10 @@ def extractive_fallback(question: str, contexts: List[str]) -> str:
     answer += "\n\n[Note: Ollama is not available. This is an extractive answer from your notes. Install Ollama for AI-generated responses.]"
     return answer
 
-# ─── RAG Pipeline ───
+# ─── RAG Retrieval Pipeline ───
 
 def build_rag_prompt(question: str, contexts: List[str]) -> str:
-    """Construct a grounded prompt ensuring answers only use retrieved context."""
+    """Construct a grounded prompt — answers must come strictly from context."""
     context_block = "\n\n---\n\n".join(contexts)
     return f"""You are a helpful assistant that answers questions based ONLY on the provided context from the user's personal notes. Do not use any external knowledge. If the answer cannot be found in the context, say "I couldn't find relevant information in your notes."
 
@@ -231,11 +270,101 @@ QUESTION: {question}
 
 ANSWER (based strictly on the above context):"""
 
+# ─── Knowledge Graph Module ───
+
+def _compute_collection_hash() -> str:
+    """
+    Generate a hash representing the current state of the ChromaDB collection.
+    Used to invalidate the graph cache when chunks change.
+    """
+    total = collection.count()
+    if total == 0:
+        return "empty"
+    # Use count + first/last IDs as a fast fingerprint
+    all_data = collection.get(limit=1, include=[])
+    first_id = all_data["ids"][0] if all_data["ids"] else ""
+    return hashlib.md5(f"{total}:{first_id}".encode()).hexdigest()
+
+async def get_cached_graph(collection_hash: str, threshold: float):
+    """Retrieve cached graph from MongoDB if still valid."""
+    cache = await db.graph_cache.find_one(
+        {"collection_hash": collection_hash, "threshold": threshold},
+        {"_id": 0}
+    )
+    return cache
+
+async def save_graph_cache(collection_hash: str, threshold: float, nodes: list, edges: list):
+    """Save computed graph to MongoDB for fast retrieval."""
+    await db.graph_cache.delete_many({"threshold": threshold})
+    await db.graph_cache.insert_one({
+        "collection_hash": collection_hash,
+        "threshold": threshold,
+        "nodes": nodes,
+        "edges": edges,
+        "computed_at": datetime.now(timezone.utc).isoformat()
+    })
+
+def compute_knowledge_graph(threshold: float) -> dict:
+    """
+    Build a knowledge graph from all stored chunks.
+    Nodes = chunks, Edges = cosine similarity above threshold.
+    Uses numpy for efficient pairwise computation.
+    """
+    total = collection.count()
+    if total == 0:
+        return {"nodes": [], "edges": []}
+
+    # Fetch all chunks with embeddings and metadata
+    all_data = collection.get(
+        include=["embeddings", "metadatas", "documents"],
+        limit=total
+    )
+
+    ids = all_data["ids"]
+    embeddings = np.array(all_data["embeddings"])
+    metadatas = all_data["metadatas"]
+    documents = all_data["documents"]
+
+    # Build node list
+    nodes = []
+    for i, (chunk_id, meta, doc) in enumerate(zip(ids, metadatas, documents)):
+        nodes.append({
+            "id": chunk_id,
+            "label": f"{meta.get('title', 'Note')}[{meta.get('chunk_index', i)}]",
+            "note_title": meta.get("title", "Unknown"),
+            "note_id": meta.get("note_id", ""),
+            "chunk_index": meta.get("chunk_index", i),
+            "text_preview": (doc[:120] + "...") if len(doc) > 120 else doc,
+        })
+
+    # Compute pairwise cosine similarity using normalized dot products
+    # Normalize embeddings (sentence-transformers outputs are already unit-normed, but normalize anyway)
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms[norms == 0] = 1  # avoid division by zero
+    normed = embeddings / norms
+
+    # Similarity matrix: (N x N) — only compute upper triangle
+    edges = []
+    n = len(ids)
+    if n > 1:
+        sim_matrix = np.dot(normed, normed.T)
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = float(sim_matrix[i][j])
+                if sim >= threshold:
+                    edges.append({
+                        "source": ids[i],
+                        "target": ids[j],
+                        "weight": round(sim, 4),
+                    })
+
+    return {"nodes": nodes, "edges": edges}
+
 # ─── API Routes ───
 
 @api_router.get("/health", response_model=HealthResponse)
 async def health_check():
-    """System health check."""
+    """System health check — all local services."""
     ollama_ok = await check_ollama()
     total_chunks = collection.count()
     return HealthResponse(
@@ -249,7 +378,8 @@ async def health_check():
 @api_router.post("/ingest")
 async def ingest_note(request: NoteIngestRequest):
     """
-    Ingest a note: chunk text, generate embeddings, store in ChromaDB + MongoDB.
+    Ingest a note: chunk → embed → store in ChromaDB + MongoDB.
+    Invalidates graph cache on new ingestion.
     """
     content = request.content.strip()
     if not content:
@@ -258,18 +388,17 @@ async def ingest_note(request: NoteIngestRequest):
     note_id = str(uuid.uuid4())
     title = request.title.strip() or f"Note {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
 
-    # Chunk the text
+    # Chunk the text into semantic segments
     chunks = chunk_text(content)
     if not chunks:
         raise HTTPException(status_code=400, detail="Content too short to process")
 
-    # Generate embeddings locally
+    # Generate embeddings locally (no network)
     embeddings = generate_embeddings(chunks)
 
-    # Store in ChromaDB
+    # Store vectors in ChromaDB
     chunk_ids = [f"{note_id}_chunk_{i}" for i in range(len(chunks))]
     metadatas = [{"note_id": note_id, "title": title, "chunk_index": i} for i in range(len(chunks))]
-
     collection.add(
         ids=chunk_ids,
         embeddings=embeddings,
@@ -277,7 +406,7 @@ async def ingest_note(request: NoteIngestRequest):
         metadatas=metadatas
     )
 
-    # Store note metadata in MongoDB
+    # Store metadata in MongoDB
     note_doc = {
         "id": note_id,
         "title": title,
@@ -287,6 +416,9 @@ async def ingest_note(request: NoteIngestRequest):
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.notes.insert_one(note_doc)
+
+    # Invalidate graph cache (collection changed)
+    await db.graph_cache.delete_many({})
 
     return {
         "id": note_id,
@@ -300,7 +432,7 @@ async def ingest_file(
     file: UploadFile = File(...),
     title: str = Form("")
 ):
-    """Ingest a .txt or .md file."""
+    """Ingest a .txt or .md file — reads content and delegates to ingest_note."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -314,7 +446,6 @@ async def ingest_file(
     if not content:
         raise HTTPException(status_code=400, detail="File is empty")
 
-    # Reuse the ingest logic
     req = NoteIngestRequest(
         title=title or file.filename,
         content=content,
@@ -325,7 +456,10 @@ async def ingest_file(
 @api_router.post("/ask", response_model=AskResponse)
 async def ask_question(request: AskRequest):
     """
-    RAG query: embed question, retrieve top-k chunks, generate answer.
+    RAG query pipeline:
+    1. Embed the question locally
+    2. Retrieve top-k chunks from ChromaDB by cosine similarity
+    3. Generate answer via Ollama (or extractive fallback)
     """
     question = request.question.strip()
     if not question:
@@ -339,10 +473,10 @@ async def ask_question(request: AskRequest):
             ollama_available=False
         )
 
-    # Embed the question
+    # Embed the question (local, no network)
     q_embedding = generate_embeddings([question])[0]
 
-    # Retrieve top-k from ChromaDB
+    # Retrieve top-k relevant chunks
     top_k = min(request.top_k, total)
     results = collection.query(
         query_embeddings=[q_embedding],
@@ -354,7 +488,7 @@ async def ask_question(request: AskRequest):
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     distances = results["distances"][0] if results["distances"] else []
 
-    # Build sources for frontend display
+    # Build source references for frontend
     sources = []
     for i, (doc, meta, dist) in enumerate(zip(contexts, metadatas, distances)):
         sources.append({
@@ -362,7 +496,7 @@ async def ask_question(request: AskRequest):
             "text": doc[:300],
             "note_title": meta.get("title", "Unknown"),
             "note_id": meta.get("note_id", ""),
-            "relevance": round(1 - dist, 3)  # cosine similarity
+            "relevance": round(1 - dist, 3)  # cosine similarity = 1 - cosine distance
         })
 
     # Try Ollama first, fall back to extractive
@@ -382,28 +516,48 @@ async def ask_question(request: AskRequest):
         ollama_available=ollama_ok
     )
 
-@api_router.get("/notes", response_model=List[NoteResponse])
-async def list_notes():
-    """List all ingested notes."""
-    notes = await db.notes.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return [NoteResponse(**n) for n in notes]
+@api_router.get("/notes", response_model=PaginatedNotesResponse)
+async def list_notes(
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page")
+):
+    """
+    List ingested notes with pagination.
+    Returns paginated response with total count and page metadata.
+    """
+    total = await db.notes.count_documents({})
+    total_pages = max(1, (total + limit - 1) // limit)
+
+    skip = (page - 1) * limit
+    notes = await db.notes.find(
+        {}, {"_id": 0}
+    ).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+
+    return PaginatedNotesResponse(
+        notes=[NoteResponse(**n) for n in notes],
+        total=total,
+        page=page,
+        limit=limit,
+        total_pages=total_pages
+    )
 
 @api_router.delete("/notes/{note_id}")
 async def delete_note(note_id: str):
-    """Delete a note and its vectors from ChromaDB."""
-    # Remove from MongoDB
+    """Delete a note and its vectors from ChromaDB. Invalidates graph cache."""
     result = await db.notes.delete_one({"id": note_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Note not found")
 
     # Remove vectors from ChromaDB
     try:
-        # Get all chunk IDs for this note
         all_ids = collection.get(where={"note_id": note_id})["ids"]
         if all_ids:
             collection.delete(ids=all_ids)
     except Exception:
-        pass  # ChromaDB cleanup is best-effort
+        pass  # best-effort cleanup
+
+    # Invalidate graph cache
+    await db.graph_cache.delete_many({})
 
     return {"message": "Note deleted", "id": note_id}
 
@@ -420,7 +574,54 @@ async def get_stats():
         ollama_model=OLLAMA_MODEL
     )
 
-# Include router
+@api_router.get("/graph", response_model=GraphResponse)
+async def get_knowledge_graph(
+    threshold: float = Query(
+        default=None,
+        ge=0.0, le=1.0,
+        description="Cosine similarity threshold for edges (0.0-1.0)"
+    )
+):
+    """
+    Build and return the knowledge graph.
+    Nodes = note chunks, Edges = pairs with cosine similarity above threshold.
+    Uses cached results when the collection hasn't changed.
+    """
+    # Use configurable default threshold
+    if threshold is None:
+        threshold = GRAPH_SIMILARITY_THRESHOLD
+
+    total = collection.count()
+    if total == 0:
+        return GraphResponse(nodes=[], edges=[], threshold=threshold, cached=False)
+
+    # Check cache first (avoids expensive pairwise computation)
+    collection_hash = _compute_collection_hash()
+    cached = await get_cached_graph(collection_hash, threshold)
+
+    if cached:
+        return GraphResponse(
+            nodes=[GraphNode(**n) for n in cached["nodes"]],
+            edges=[GraphEdge(**e) for e in cached["edges"]],
+            threshold=threshold,
+            cached=True
+        )
+
+    # Compute graph (expensive for large collections)
+    graph_data = compute_knowledge_graph(threshold)
+
+    # Cache the result in MongoDB
+    await save_graph_cache(collection_hash, threshold, graph_data["nodes"], graph_data["edges"])
+
+    return GraphResponse(
+        nodes=[GraphNode(**n) for n in graph_data["nodes"]],
+        edges=[GraphEdge(**e) for e in graph_data["edges"]],
+        threshold=threshold,
+        cached=False
+    )
+
+# ─── App Setup ───
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -431,7 +632,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Minimal logging (no user content logged for privacy)
+# Privacy: no user content logged
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'

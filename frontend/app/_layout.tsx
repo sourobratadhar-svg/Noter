@@ -1,3 +1,8 @@
+/**
+ * Tab Layout — Bottom navigation for the RAG Notes app.
+ * 4 tabs: CHAT, NOTES, GRAPH, SYS
+ * Brutalist Swiss design: uppercase mono text, no icons, blue active indicator.
+ */
 import { Tabs } from 'expo-router';
 import { View, Text, StyleSheet } from 'react-native';
 
@@ -34,6 +39,12 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="graph"
+        options={{
+          tabBarIcon: ({ focused }) => <TabLabel label="GRAPH" focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
         name="system"
         options={{
           tabBarIcon: ({ focused }) => <TabLabel label="SYS" focused={focused} />,
@@ -61,9 +72,9 @@ const styles = StyleSheet.create({
   tabText: {
     fontFamily: 'Courier',
     fontWeight: '600',
-    fontSize: 13,
+    fontSize: 11,
     color: '#555555',
-    letterSpacing: 1.5,
+    letterSpacing: 1,
     textTransform: 'uppercase',
   },
   tabTextActive: {
@@ -71,9 +82,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   tabIndicator: {
-    width: 40,
+    width: 32,
     height: 3,
     backgroundColor: '#002FA7',
-    marginTop: 4,
+    marginTop: 3,
   },
 });

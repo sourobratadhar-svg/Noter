@@ -102,7 +102,8 @@ class TestNoteIngestion:
         list_response = api_client.get(f"{base_url}/api/notes")
         assert list_response.status_code == 200, "Failed to fetch notes list"
         
-        notes = list_response.json()
+        data = list_response.json()
+        notes = data.get("notes", data) if isinstance(data, dict) else data
         note_ids = [n["id"] for n in notes]
         assert note_id in note_ids, f"Created note {note_id} not found in notes list"
         
@@ -221,14 +222,17 @@ class TestNotesManagement:
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
 
     def test_list_notes_returns_array(self, api_client, base_url):
-        """GET /api/notes should return array of notes"""
+        """GET /api/notes should return paginated response with notes array"""
         response = api_client.get(f"{base_url}/api/notes")
         data = response.json()
         
-        assert isinstance(data, list), "Response should be array"
+        # New paginated response format
+        assert isinstance(data, dict), "Response should be dict with pagination"
+        assert "notes" in data, "Response missing 'notes' field"
+        assert isinstance(data["notes"], list), "notes should be array"
         
-        if len(data) > 0:
-            note = data[0]
+        if len(data["notes"]) > 0:
+            note = data["notes"][0]
             assert "id" in note, "Note missing 'id' field"
             assert "title" in note, "Note missing 'title' field"
             assert "source_type" in note, "Note missing 'source_type' field"
@@ -262,7 +266,8 @@ class TestNotesManagement:
         # Verify note is gone from list
         time.sleep(0.5)
         list_response = api_client.get(f"{base_url}/api/notes")
-        notes = list_response.json()
+        data = list_response.json()
+        notes = data.get("notes", data) if isinstance(data, dict) else data
         note_ids = [n["id"] for n in notes]
         assert note_id not in note_ids, f"Deleted note {note_id} still appears in list"
 
@@ -282,7 +287,8 @@ class TestCleanup:
         if response.status_code != 200:
             pytest.skip("Cannot fetch notes for cleanup")
         
-        notes = response.json()
+        data = response.json()
+        notes = data.get("notes", data) if isinstance(data, dict) else data
         test_notes = [n for n in notes if n["title"].startswith("TEST_")]
         
         deleted_count = 0
