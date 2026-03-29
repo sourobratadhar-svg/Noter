@@ -10,8 +10,9 @@ A fully local, privacy-first Retrieval-Augmented Generation (RAG) application th
 - **Embeddings**: sentence-transformers (all-MiniLM-L6-v2, 384 dimensions)
 - **LLM**: Ollama (local, with extractive fallback when unavailable)
 - **Metadata Store**: MongoDB
+- **Graph Viz**: d3-force (via WebView)
 
-## Features (MVP)
+## Features
 
 ### 1. Notes Ingestion
 - Paste text directly into the app
@@ -30,18 +31,27 @@ A fully local, privacy-first Retrieval-Augmented Generation (RAG) application th
 - Ollama LLM integration for generated answers
 - Extractive fallback when Ollama is unavailable
 
-### 4. API Layer
+### 4. Knowledge Graph Visualization
+- Force-directed graph using d3-force in WebView
+- Nodes = note chunks, Edges = cosine similarity above configurable threshold
+- Zoom, pan, drag, and node highlighting
+- Cached computation for fast rendering
+- Graph cache invalidated on ingest/delete
+
+### 5. API Layer (Paginated)
 - `POST /api/ingest` - Ingest text notes
 - `POST /api/ingest-file` - Ingest .txt/.md files
 - `POST /api/ask` - RAG query with answer + sources
-- `GET /api/notes` - List ingested notes
+- `GET /api/notes?page=1&limit=20` - Paginated notes list
 - `DELETE /api/notes/{id}` - Delete note and vectors
 - `GET /api/health` - System health check
 - `GET /api/stats` - Collection statistics
+- `GET /api/graph?threshold=0.65` - Knowledge graph (nodes + edges)
 
-### 5. Frontend (3 Tabs)
+### 6. Frontend (4 Tabs)
 - **CHAT**: Ask questions, see RAG answers with source snippets
-- **NOTES**: Add/view/delete notes
+- **NOTES**: Add/view/delete notes with infinite scroll pagination
+- **GRAPH**: Interactive knowledge graph with threshold controls
 - **SYS**: Health status, stats, configuration, Ollama setup guide
 
 ## Privacy & Security
@@ -50,8 +60,15 @@ A fully local, privacy-first Retrieval-Augmented Generation (RAG) application th
 - No telemetry or tracking
 - No user content logging
 
+## Performance
+- Graph edges cached in MongoDB
+- Paginated note queries (skip/limit)
+- Batch embedding generation
+- Fast retrieval (<1s target)
+
 ## Tech Stack
 - Expo SDK 54, React Native 0.81
-- FastAPI, ChromaDB, sentence-transformers
-- MongoDB for metadata
+- FastAPI, ChromaDB, sentence-transformers, numpy
+- MongoDB for metadata + graph cache
 - Ollama for local LLM (optional)
+- d3-force for graph visualization
