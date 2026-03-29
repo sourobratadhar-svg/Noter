@@ -1,0 +1,103 @@
+{
+  "theme": "LIGHT",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "typography": {
+    "headings": {
+      "fontFamily": "Chivo",
+      "fallbacks": ["Helvetica Neue", "Arial", "sans-serif"],
+      "weights": ["900", "800"],
+      "tracking": "-0.04em",
+      "usage": "Use for massive screen titles and critical numbers"
+    },
+    "body": {
+      "fontFamily": "IBM Plex Mono",
+      "fallbacks": ["Courier New", "monospace"],
+      "weights": ["400", "600"],
+      "tracking": "normal",
+      "usage": "Use for chat messages, note content, and system status"
+    },
+    "labels": {
+      "fontFamily": "IBM Plex Mono",
+      "weights": ["600"],
+      "textTransform": "uppercase",
+      "tracking": "0.1em",
+      "usage": "Overlines, tabs, and tiny metadata"
+    }
+  },
+  "colors": {
+    "background": {
+      "primary": "#FFFFFF",
+      "secondary": "#F5F5F5",
+      "tertiary": "#E0E0E0"
+    },
+    "text": {
+      "primary": "#0A0A0A",
+      "secondary": "#555555",
+      "inverse": "#FFFFFF"
+    },
+    "brand_accents": {
+      "action": "#002FA7",
+      "danger": "#FF2A00",
+      "warning": "#FFDE00",
+      "success": "#00D154"
+    },
+    "borders": {
+      "default": "#0A0A0A",
+      "subtle": "#CCCCCC",
+      "action": "#002FA7"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Grid Borders (The 'Technical' Look). Expose the skeleton, make the grid visible. No rounded corners.",
+    "padding": {
+      "screen": "16px",
+      "container": "24px",
+      "dense": "8px"
+    },
+    "borders": "1px or 2px solid #0A0A0A on all functional containers",
+    "radius": "0px"
+  },
+  "components": {
+    "buttons": {
+      "primary": "Solid #0A0A0A background, White Mono text, 0px radius, 2px black border. Active state: background #002FA7.",
+      "secondary": "Transparent background, Black Mono text, 0px radius, 1px black border. Active state: background #F5F5F5.",
+      "danger": "Solid #FF2A00 background, White Mono text, 0px radius."
+    },
+    "inputs": {
+      "text": "Stark white background, 2px black bottom border (or full box), 0px radius. Mono font for input. Focus state: border turns #002FA7.",
+      "textarea": "Like text input, but large box with 2px border all around. Used for notes ingestion."
+    },
+    "chat_message": {
+      "user": "White bg, black text, full-width row with a stark 1px black border top. No chat bubbles. Raw text.",
+      "ai": "#F5F5F5 bg, black text, full-width row with 1px black border top. Includes sub-block for 'SOURCES [K]'.",
+      "context_snippet": "Wrapped in a 1px border block with a #E0E0E0 background. Text is strictly Mono and slightly smaller, prepended with a blue 'SRC //' label."
+    },
+    "cards": {
+      "style": "Flat white background, 1px solid black border, no shadow. 0px radius. Used for notes list items."
+    },
+    "navigation": {
+      "bottom_tab": "Hard 2px black top border. No icons, just bold uppercase mono text like [ CHAT ], [ NOTES ], [ SYS ]. Active tab gets #002FA7 text and a thick blue indicator."
+    }
+  },
+  "interactions": {
+    "feedback": "Instant, brutalist active states. No soft ripples. Opacity drops or stark color inversions.",
+    "loading": "ASCII art spinners, stark flashing blocks, or simple pulsing mono text '[ PROCESSING... ]'."
+  },
+  "accessibility": {
+    "contrast": "Strict WCAG AAA compliance. Black on White, Blue on White.",
+    "motion": "Minimal to zero transitions. Instant state changes."
+  },
+  "media": {
+    "image_urls": [],
+    "instructions": "This is a strictly typographic, UI-centric application. Do not use placeholder images or avatars. Use typography and stark layout for visual weight."
+  },
+  "instructions_to_main_agent": [
+    "Install `@expo-google-fonts/chivo` and `@expo-google-fonts/ibm-plex-mono` if possible, otherwise map to heavily weighted system fonts and system monospace.",
+    "Use standard React Native `View`, `TextInput`, and `FlatList` instead of web HTML. Utilize NativeWind or StyleSheet.",
+    "Implement the bottom tab navigator without icons, just pure monospace typography.",
+    "Ensure the Chat interface displays RAG retrieved snippets clearly below the AI's answer, styled as mechanical 'SOURCES'.",
+    "Notes ingestion screen should look like a raw terminal or code editor for pasting text.",
+    "Health/Settings screen should clearly display Ollama connection status using the success/danger colors.",
+    "CRITICAL: All interactive and key informational elements MUST include a `testID` attribute (React Native equivalent of data-testid) formatted as kebab-case, role-based."
+  ]
+}
