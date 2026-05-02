@@ -59,10 +59,10 @@ class RAGPipeline:
     Falls back to extractive answers when Ollama is unavailable.
     """
 
-    def __init__(self, embedding_engine: EmbeddingEngine, collection, ollama_client: OllamaClient):
+    def __init__(self, embedding_engine: EmbeddingEngine, collection, llm_router):
         self.embeddings = embedding_engine
         self.collection = collection
-        self.ollama = ollama_client
+        self.llm = llm_router
 
     async def query(self, question: str, top_k: int = 3, chat_history: List[dict] = None) -> dict:
         """
@@ -91,7 +91,7 @@ class RAGPipeline:
                 "ollama_available": False,
                 "ollama_error": None,
                 "mode": "none",
-                "model": self.ollama.model,
+                "model": self.llm.model,
             }
 
         # Step 1: Enhance search query conditionally for short follow-ups
@@ -148,34 +148,34 @@ class RAGPipeline:
                 "relevance": round(1 - dist, 3)
             })
 
-        # Step 3: Try Ollama LLM first
-        ollama_status = await self.ollama.check_health()
-        ollama_error = None
+        # Step 3: Try LLM first
+        llm_status = await self.llm.check_health()
+        llm_error = None
 
-        if ollama_status["available"]:
+        if llm_status["available"]:
             # Step 4: Build grounded prompt and generate
             prompt = build_rag_prompt(question, final_contexts, chat_history)
-            result = await self.ollama.generate(prompt)
+            result = await self.llm.generate(prompt)
 
             if result["success"] and result["text"]:
                 answer_text = result["text"].strip()
-                ollama_sources = sources
+                llm_sources = sources
                 if answer_text == "I couldn't find relevant notes for this question.":
-                    ollama_sources = []
+                    llm_sources = []
                 
                 return {
                     "answer": answer_text,
-                    "sources": ollama_sources,
+                    "sources": llm_sources,
                     "ollama_available": True,
                     "ollama_error": None,
-                    "mode": "ollama",
+                    "mode": self.llm.active_engine,
                     "model": result["model"],
                 }
             else:
-                ollama_error = result.get("error", "Generation failed")
+                llm_error = result.get("error", "Generation failed")
 
         else:
-            ollama_error = ollama_status.get("error", "Ollama not available")
+            llm_error = llm_status.get("error", "LLM not available")
 
         # Step 5: Fallback to extractive answer
         answer = extractive_fallback(question, final_contexts)
@@ -188,7 +188,7 @@ class RAGPipeline:
             "answer": answer,
             "sources": fallback_sources,
             "ollama_available": False,
-            "ollama_error": ollama_error,
+            "ollama_error": llm_error,
             "mode": "extractive",
-            "model": self.ollama.model,
+            "model": self.llm.model,
         }

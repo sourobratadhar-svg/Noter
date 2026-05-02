@@ -34,6 +34,8 @@ import hashlib
 from chunking import chunk_text
 from embeddings import EmbeddingEngine
 from llm import OllamaClient
+from qwen_llm import QwenClient
+from llm_router import LLMRouter
 from rag import RAGPipeline
 
 ROOT_DIR = Path(__file__).parent
@@ -63,8 +65,14 @@ OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'mistral')
 ollama_client = OllamaClient(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL)
 
+# Qwen LLM Client (Optional/parallel)
+qwen_client = QwenClient()
+
+# LLM Router handles dynamically switching engines
+llm_router = LLMRouter(ollama_client, qwen_client)
+
 # RAG: full pipeline combining embeddings + retrieval + LLM
-rag_pipeline = RAGPipeline(embedding_engine, collection, ollama_client)
+rag_pipeline = RAGPipeline(embedding_engine, collection, llm_router)
 
 # Graph config
 GRAPH_SIMILARITY_THRESHOLD = float(os.environ.get('GRAPH_SIMILARITY_THRESHOLD', '0.65'))
@@ -146,6 +154,9 @@ class GraphResponse(BaseModel):
 
 class OllamaModelRequest(BaseModel):
     model: str
+
+class EngineSwitchRequest(BaseModel):
+    engine: str
 
 # ─── Knowledge Graph Module ───
 
@@ -230,9 +241,9 @@ async def health_check():
     """
     Detailed system health check.
     Returns status of all local services: backend, ChromaDB, Ollama.
-    Includes Ollama model list and error details for troubleshooting.
+    Includes Ollama/Qwen model list and error details for troubleshooting.
     """
-    ollama_status = await ollama_client.check_health()
+    ollama_status = await llm_router.check_health()
     total_chunks = collection.count()
     return HealthResponse(
         status="operational",
@@ -266,6 +277,15 @@ async def ollama_status():
             "network": "Ensure phone and laptop are on the same WiFi network",
         }
     }
+
+@api_router.post("/engine")
+async def switch_engine(req: EngineSwitchRequest):
+    """
+    Switch the active LLM engine between 'ollama' and 'qwen'.
+    """
+    if llm_router.set_engine(req.engine):
+        return {"success": True, "engine": req.engine}
+    raise HTTPException(status_code=400, detail="Invalid engine. Use 'ollama' or 'qwen'.")
 
 @api_router.post("/ollama/model")
 async def set_ollama_model(request: OllamaModelRequest):
