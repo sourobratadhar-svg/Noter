@@ -127,10 +127,14 @@ class RAGPipeline:
             doc_len = len(doc)
             if final_contexts and current_chars + doc_len > char_limit:
                 break
-            final_contexts.append(doc)
+            # Inject title into the text so the LLM has full context
+            title = meta.get("title", "Unknown Title")
+            enriched_doc = f"Title: {title}\nContent: {doc}"
+            
+            final_contexts.append(enriched_doc)
             final_metadatas.append(meta)
             final_distances.append(dist)
-            current_chars += doc_len
+            current_chars += len(enriched_doc)
 
         # Build source references for frontend
         sources = []
