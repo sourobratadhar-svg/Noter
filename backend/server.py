@@ -35,6 +35,7 @@ from chunking import chunk_text
 from embeddings import EmbeddingEngine
 from llm import OllamaClient
 from qwen_llm import QwenClient
+from gemma_llm import GemmaClient
 from llm_router import LLMRouter
 from rag import RAGPipeline
 
@@ -68,8 +69,11 @@ ollama_client = OllamaClient(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL)
 # Qwen LLM Client (Optional/parallel)
 qwen_client = QwenClient()
 
+# Gemma 4 LLM Client (Optional/parallel)
+gemma_client = GemmaClient()
+
 # LLM Router handles dynamically switching engines
-llm_router = LLMRouter(ollama_client, qwen_client)
+llm_router = LLMRouter(ollama_client, qwen_client, gemma_client)
 
 # RAG: full pipeline combining embeddings + retrieval + LLM
 rag_pipeline = RAGPipeline(embedding_engine, collection, llm_router)
@@ -281,11 +285,11 @@ async def ollama_status():
 @api_router.post("/engine")
 async def switch_engine(req: EngineSwitchRequest):
     """
-    Switch the active LLM engine between 'ollama' and 'qwen'.
+    Switch the active LLM engine between 'ollama', 'qwen', and 'gemma'.
     """
     if llm_router.set_engine(req.engine):
         return {"success": True, "engine": req.engine}
-    raise HTTPException(status_code=400, detail="Invalid engine. Use 'ollama' or 'qwen'.")
+    raise HTTPException(status_code=400, detail="Invalid engine. Use 'ollama', 'qwen', or 'gemma'.")
 
 @api_router.post("/ollama/model")
 async def set_ollama_model(request: OllamaModelRequest):

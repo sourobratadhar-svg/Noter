@@ -3,19 +3,24 @@ class LLMRouter:
     Routes generation requests to the active LLM engine.
     Ensures seamless switching between Ollama and Qwen without breaking the RAG pipeline.
     """
-    def __init__(self, ollama_client, qwen_client):
+    def __init__(self, ollama_client, qwen_client, gemma_client):
         self.ollama = ollama_client
         self.qwen = qwen_client
-        self.active_engine = "qwen"
+        self.gemma = gemma_client
+        self.active_engine = "gemma"
 
     def set_engine(self, engine: str) -> bool:
-        if engine in ["ollama", "qwen"]:
+        if engine in ["ollama", "qwen", "gemma"]:
             self.active_engine = engine
             return True
         return False
 
     def get_active_client(self):
-        return self.qwen if self.active_engine == "qwen" else self.ollama
+        if self.active_engine == "qwen":
+            return self.qwen
+        elif self.active_engine == "gemma":
+            return self.gemma
+        return self.ollama
 
     @property
     def model(self):
