@@ -6,7 +6,7 @@ class GemmaClient:
     Gemma 4 API integration.
     Implements the same interface as OllamaClient and QwenClient so it can be dynamically swapped.
     """
-    def __init__(self, api_key: str = None, base_url: str = "https://openrouter.ai/api/v1", model: str = "google/gemma-4-26b-a4b-it:free"):
+    def __init__(self, api_key: str = None, base_url: str = "https://openrouter.ai/api/v1", model: str = "google/gemma-3-12b-it:free"):
         self.api_key = api_key or os.environ.get("GEMMA_API_KEY", "")
         self.base_url = base_url.rstrip("/")
         self.model = model
