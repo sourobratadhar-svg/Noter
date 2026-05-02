@@ -260,25 +260,25 @@ async def health_check():
         embedding_model=embedding_engine.model_name,
         total_chunks=total_chunks
     )
-
-@api_router.get("/ollama/status")
-async def ollama_status():
+    # Inject active_engine into response dict manually if pydantic model doesn't have it
+    # We will just update HealthResponse
+    
+@api_router.get("/llm/status")
+async def llm_status():
     """
-    Detailed Ollama status — used by the mobile app's system screen.
+    Detailed LLM status — used by the mobile app's system screen.
     Returns connection status, available models, and troubleshooting hints.
     """
-    status = await ollama_client.check_health()
+    status = await llm_router.check_health()
     return {
         "available": status["available"],
         "models": status["models"],
         "active_model": status["active_model"],
         "model_loaded": status["model_loaded"],
-        "error": status["error"],
-        "base_url": OLLAMA_BASE_URL,
+        "error": status.get("error"),
+        "active_engine": llm_router.active_engine,
         "troubleshooting": {
-            "not_running": "Start Ollama with: ollama serve",
-            "no_model": f"Pull a model with: ollama pull {ollama_client.model}",
-            "network": "Ensure phone and laptop are on the same WiFi network",
+            "hint": "Check API keys or Ollama server depending on active engine."
         }
     }
 
@@ -291,37 +291,27 @@ async def switch_engine(req: EngineSwitchRequest):
         return {"success": True, "engine": req.engine}
     raise HTTPException(status_code=400, detail="Invalid engine. Use 'ollama', 'qwen', or 'gemma'.")
 
-@api_router.post("/ollama/model")
-async def set_ollama_model(request: OllamaModelRequest):
+@api_router.post("/llm/model")
+async def set_llm_model(request: OllamaModelRequest):
     """
-    Change the active Ollama model at runtime.
-    The model must already be pulled in Ollama.
+    Change the active model for the current engine at runtime.
     """
-    old_model = ollama_client.model
-    ollama_client.set_model(request.model)
+    active_client = llm_router.get_active_client()
+    old_model = active_client.model
+    active_client.set_model(request.model)
 
-    # Verify the new model is available
-    status = await ollama_client.check_health()
-    if status["available"] and status["model_loaded"]:
+    status = await active_client.check_health()
+    if status["available"]:
         return {
             "success": True,
             "model": request.model,
-            "message": f"Switched from {old_model} to {request.model}"
+            "message": f"Switched {llm_router.active_engine} model from {old_model} to {request.model}"
         }
-    elif status["available"]:
-        return {
-            "success": True,
-            "model": request.model,
-            "message": f"Model set to {request.model} (not yet pulled — run: ollama pull {request.model})",
-            "warning": "Model not found in Ollama"
-        }
-    else:
-        # Still set it — Ollama might start later
-        return {
-            "success": True,
-            "model": request.model,
-            "message": f"Model set to {request.model} (Ollama not running)"
-        }
+    return {
+        "success": True,
+        "model": request.model,
+        "message": f"Model set to {request.model} (Note: engine reported unavailability)"
+    }
 
 @api_router.post("/ingest")
 async def ingest_note(request: NoteIngestRequest):

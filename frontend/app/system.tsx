@@ -1,9 +1,5 @@
 /**
- * SYS Screen — System Health, Ollama Diagnostics & Network Setup
- * ===============================================================
- * Shows detailed health of all local services.
- * Provides Ollama setup instructions and model management.
- * Includes network setup guide for mobile-to-laptop connection.
+ * SYS Screen — System Health, Diagnostics & Network Setup
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -33,14 +29,14 @@ type StatsData = {
   ollama_model: string;
 };
 
-type OllamaStatus = {
+type LLMStatus = {
   available: boolean;
   models: string[];
   active_model: string;
   model_loaded: boolean;
   error: string | null;
-  base_url: string;
-  troubleshooting: { not_running: string; no_model: string; network: string };
+  active_engine: string;
+  troubleshooting: any;
 };
 
 function StatusRow({ label, value, status }: { label: string; value: string; status?: 'ok' | 'warn' | 'err' }) {
@@ -68,11 +64,15 @@ function StatBlock({ label, value }: { label: string; value: string | number }) 
 export default function SystemScreen() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [stats, setStats] = useState<StatsData | null>(null);
-  const [ollamaDetail, setOllamaDetail] = useState<OllamaStatus | null>(null);
+  const [llmDetail, setLlmDetail] = useState<LLMStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastCheck, setLastCheck] = useState('');
+  
   const [modelInput, setModelInput] = useState('');
   const [modelMsg, setModelMsg] = useState('');
+  
+  const [engineInput, setEngineInput] = useState('');
+  const [engineMsg, setEngineMsg] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -80,16 +80,16 @@ export default function SystemScreen() {
       const [hResp, sResp, oResp] = await Promise.all([
         fetch(`${API_URL}/api/health`),
         fetch(`${API_URL}/api/stats`),
-        fetch(`${API_URL}/api/ollama/status`),
+        fetch(`${API_URL}/api/llm/status`),
       ]);
       setHealth(await hResp.json());
       setStats(await sResp.json());
-      setOllamaDetail(await oResp.json());
+      setLlmDetail(await oResp.json());
       setLastCheck(new Date().toLocaleTimeString());
     } catch {
       setHealth(null);
       setStats(null);
-      setOllamaDetail(null);
+      setLlmDetail(null);
     } finally {
       setLoading(false);
     }
@@ -101,7 +101,7 @@ export default function SystemScreen() {
     const m = modelInput.trim();
     if (!m) return;
     try {
-      const resp = await fetch(`${API_URL}/api/ollama/model`, {
+      const resp = await fetch(`${API_URL}/api/llm/model`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: m }),
@@ -112,6 +112,28 @@ export default function SystemScreen() {
       refresh();
     } catch {
       setModelMsg('Failed to update model');
+    }
+  };
+
+  const switchEngine = async () => {
+    const e = engineInput.trim().toLowerCase();
+    if (!e) return;
+    try {
+      const resp = await fetch(`${API_URL}/api/engine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine: e }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setEngineMsg(`Engine switched to ${e}`);
+      } else {
+        setEngineMsg(data.detail || 'Failed to switch engine');
+      }
+      setEngineInput('');
+      refresh();
+    } catch {
+      setEngineMsg('Network error switching engine');
     }
   };
 
@@ -140,57 +162,81 @@ export default function SystemScreen() {
             <>
               <StatusRow label="BACKEND" value={health.status.toUpperCase()} status={health.status === 'operational' ? 'ok' : 'err'} />
               <StatusRow label="CHROMADB" value={health.chromadb.toUpperCase()} status={health.chromadb === 'connected' ? 'ok' : 'err'} />
-              <StatusRow label="OLLAMA" value={health.ollama.toUpperCase()} status={health.ollama === 'connected' ? 'ok' : 'warn'} />
               <StatusRow label="EMBEDDINGS" value={health.embedding_model} status="ok" />
             </>
           ) : (
             <View style={styles.errorBox} testID="sys-connection-error">
               <Text style={styles.errorText}>BACKEND UNREACHABLE</Text>
-              <Text style={styles.errorSub}>Ensure backend is running on port 8001</Text>
+              <Text style={styles.errorSub}>Ensure backend is running on port 8000</Text>
               <Text style={styles.errorSub}>Phone and laptop must be on same WiFi</Text>
             </View>
           )}
         </View>
 
-        {/* ── Ollama Details ── */}
+        {/* ── LLM Engine Details ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>OLLAMA LLM</Text>
-          {ollamaDetail ? (
+          <Text style={styles.sectionTitle}>ACTIVE LLM ENGINE</Text>
+          {llmDetail ? (
             <>
               <StatusRow
-                label="CONNECTION"
-                value={ollamaDetail.available ? 'ONLINE' : 'OFFLINE'}
-                status={ollamaDetail.available ? 'ok' : 'err'}
+                label="ENGINE"
+                value={llmDetail.active_engine?.toUpperCase() || 'UNKNOWN'}
+                status="ok"
               />
               <StatusRow
-                label="ACTIVE MODEL"
-                value={ollamaDetail.active_model}
-                status={ollamaDetail.model_loaded ? 'ok' : 'warn'}
+                label="STATUS"
+                value={llmDetail.available ? 'ONLINE' : 'OFFLINE'}
+                status={llmDetail.available ? 'ok' : 'err'}
               />
-              {ollamaDetail.models.length > 0 && (
+              <StatusRow
+                label="MODEL"
+                value={llmDetail.active_model}
+                status={llmDetail.model_loaded ? 'ok' : 'warn'}
+              />
+              {llmDetail.models && llmDetail.models.length > 0 && (
                 <StatusRow
                   label="AVAILABLE"
-                  value={ollamaDetail.models.join(', ')}
+                  value={llmDetail.models.join(', ')}
                 />
               )}
-              {ollamaDetail.error && (
-                <View style={styles.warningBox} testID="ollama-error-detail">
-                  <Text style={styles.warningText}>{ollamaDetail.error}</Text>
+              {llmDetail.error && (
+                <View style={styles.warningBox}>
+                  <Text style={styles.warningText}>{llmDetail.error}</Text>
                 </View>
               )}
+
+              {/* Engine switcher */}
+              <View style={styles.modelSwitcher}>
+                <TextInput
+                  style={styles.modelInput}
+                  value={engineInput}
+                  onChangeText={setEngineInput}
+                  placeholder="Engine: ollama, qwen, gemma"
+                  placeholderTextColor="#999"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={[styles.modelBtn, !engineInput.trim() && styles.btnDisabled]}
+                  onPress={switchEngine}
+                  disabled={!engineInput.trim()}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.modelBtnText}>SET</Text>
+                </TouchableOpacity>
+              </View>
+              {engineMsg ? <Text style={styles.modelMsg}>{engineMsg}</Text> : null}
 
               {/* Model switcher */}
               <View style={styles.modelSwitcher}>
                 <TextInput
-                  testID="model-input"
                   style={styles.modelInput}
                   value={modelInput}
                   onChangeText={setModelInput}
-                  placeholder="e.g. mistral, llama3, phi3"
+                  placeholder="Model: e.g. mistral, google/gemma..."
                   placeholderTextColor="#999"
+                  autoCapitalize="none"
                 />
                 <TouchableOpacity
-                  testID="switch-model-btn"
                   style={[styles.modelBtn, !modelInput.trim() && styles.btnDisabled]}
                   onPress={switchModel}
                   disabled={!modelInput.trim()}
@@ -202,7 +248,7 @@ export default function SystemScreen() {
               {modelMsg ? <Text style={styles.modelMsg}>{modelMsg}</Text> : null}
             </>
           ) : health ? (
-            <Text style={styles.infoTextSmall}>Could not fetch Ollama details</Text>
+            <Text style={styles.infoTextSmall}>Could not fetch LLM details</Text>
           ) : null}
         </View>
 
@@ -228,64 +274,12 @@ export default function SystemScreen() {
               WiFi network for the app to work.
             </Text>
           </View>
-          <View style={styles.infoBox}>
-            <Text style={styles.infoCode}>
-              # Find your laptop's local IP:{'\n'}
-              # macOS: ifconfig | grep inet{'\n'}
-              # Linux: ip addr show | grep inet{'\n'}
-              # Windows: ipconfig{'\n'}
-              {'\n'}
-              # Set backend URL in the app to:{'\n'}
-              # http://YOUR_IP:8001{'\n'}
-              {'\n'}
-              # Example: http://192.168.1.42:8001
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Ollama Setup ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>OLLAMA SETUP GUIDE</Text>
-          <View style={styles.infoBox}>
-            <Text style={styles.infoCode}>
-              # 1. Install Ollama{'\n'}
-              curl -fsSL https://ollama.ai/install.sh | sh{'\n'}
-              {'\n'}
-              # 2. Pull a model (~4GB for mistral){'\n'}
-              ollama pull mistral{'\n'}
-              {'\n'}
-              # 3. Start Ollama (auto-starts on install){'\n'}
-              ollama serve{'\n'}
-              {'\n'}
-              # 4. Verify it works{'\n'}
-              curl http://localhost:11434/api/tags{'\n'}
-              {'\n'}
-              # Other models to try:{'\n'}
-              # ollama pull llama3{'\n'}
-              # ollama pull phi3{'\n'}
-              # ollama pull gemma2
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Privacy ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>PRIVACY</Text>
-          <View style={styles.infoBox}>
-            <Text style={styles.infoText}>
-              All data processing happens locally.{'\n'}
-              No external API calls are made.{'\n'}
-              Your notes never leave this device.{'\n'}
-              Embeddings + LLM run on your machine.
-            </Text>
-          </View>
         </View>
 
         {/* ── Configuration ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>CONFIGURATION</Text>
           <StatusRow label="EMBEDDING MODEL" value={stats?.embedding_model || 'all-MiniLM-L6-v2'} />
-          <StatusRow label="OLLAMA MODEL" value={stats?.ollama_model || 'mistral'} />
           <StatusRow label="VECTOR DB" value="ChromaDB (persistent)" />
           <StatusRow label="STORAGE" value="Local only" />
           <StatusRow label="BACKEND URL" value={API_URL || 'not set'} />
